@@ -1,0 +1,131 @@
+<?php
+class FormBuilderFieldCloner extends WireData implements Module
+{
+
+	public static function getModuleInfo()
+	{
+		return array(
+			'title' => 'Form Builder Field Cloner',
+			'author' => 'Mike Spooner (thetuningspoon), Solution Innovators',
+			'version' => 002,
+			'summary' => 'Adds the ability to clone a field or fieldset in Form Builder from the field edit page.',
+			'singular' => true,
+			'autoload' => true,
+			'installs' => array(),
+			'requires' => array('FormBuilder'),
+		);
+	}
+
+	public function __construct()
+	{
+	}
+
+	public function init()
+	{
+		/**
+		 * Adds cloning fields to the formBuilder edit field page
+		 *
+		 */
+		$this->addHookAfter('ProcessFormBuilder::buildEditField', function($event) {
+			$form = $event->return;
+			$editField = $event->arguments[0];
+			$that = $event->object;
+
+			if(!empty($editField)) {
+				$numClones = $that->wire('modules')->get('InputfieldInteger');
+				$numClones->name = 'num_clones';
+				$numClones->label = 'Clone';
+				$numClones->inputType = 'Number';
+				$numClones->description = 'Enter the number of clones of this field you would like to create and click Save.';
+				$numClones->collapsed = Inputfield::collapsedYes;
+				$numClones->icon = 'copy';
+
+				$saveBtn = $form->get('_submit_save_field');
+				$form->insertBefore($numClones, $saveBtn);
+			}
+
+			$event->return = $form;
+		});
+
+
+		/**
+		 * Does the field cloning when a field is saved with a value in the num_clones box
+		 *
+		 */
+		$this->addHookBefore('ProcessFormBuilder::executeEditField', function($event) {
+			$that = $event->object;
+
+			$editFieldName = $that->sanitizer->name($that->input->get->name);
+			if(!$editFieldName) return;
+
+			$formId = (int) $that->input->get->id;
+			if(!$formId) return;
+
+			$num_clones = (int) $that->input->post->num_clones;
+			//$confirm_clones = $that->input->post->confirm_clones;
+
+			if($num_clones > 0 /*&& $confirm_clones == 1*/) {
+				$form = $that->forms->load($formId);
+				if(!$form) return;
+				$editField = $form->find($editFieldName);
+				if(!$editField) return;
+
+				// Clone the inputfield and add it to the form after the current field. Clone all children as well.
+
+				// Figure out what the cloneId should be by starting at 2 and checking whether a field with that name already exists. If it does, we increment the id until no match is found
+				$cloneId = 2;
+				while($form->find($editField->name . "_$cloneId")) {
+					$cloneId++;
+				}
+
+				$prevField = $editField;
+				for($i = 1; $i <= $num_clones; $i++) {
+					// This is a roundabout way of making a deep copy of the field object, including children
+					$oldFieldArray = $editField->getArray();
+					$newField = new FormBuilderField();
+					$newField->setArray($oldFieldArray);
+
+					// Update the name and id to make them unique
+					$newField->name = "{$editField->name}_$cloneId";
+					$newField->id = "{$editField->id}_$cloneId";
+					$newField->label = "{$editField->label} $cloneId";
+
+					// Update name and id for child fields as well (recursive)
+					$newField = indexChildFieldProperties($newField, $cloneId);
+
+					$form->add($newField, $prevField);
+					$prevField = $newField;
+
+					$cloneId++; // Increment the clone identifier for the next field
+				}
+
+
+				$form->save();
+			}
+
+		});
+
+		function indexChildFieldProperties(FormBuilderField $field, $cloneId) {
+			$children = $field->children;
+			if(count($children)) {
+				foreach($children as $child) {
+					$child->name = "{$child->name}_$cloneId";
+					$child->id = "{$child->id}_$cloneId";
+
+					indexChildFieldProperties($child, $cloneId);
+				}
+			}
+
+			return $field;
+		}
+
+	}
+
+	public function ready() { // PW API is ready
+	}
+
+	public function install() {}
+
+	public function uninstall() {}
+
+}
